@@ -41,6 +41,25 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>> VmCpus<H, PD> {
         Ok(())
     }
 
+    /// Adds the given vCPU to the set of vCPUs(nimbos)
+    pub fn add_vcpu_nimbos(&mut self, vcpu: VCpu<H>) -> HyperResult<()> {
+        let vcpu_id = vcpu.vcpu_id();
+        let once_entry = self.inner.get(vcpu_id).ok_or(HyperError::BadState)?;
+
+        let real_vcpu = once_entry.call_once(|| vcpu);
+        let device_once_entry = self.device.get(vcpu_id).ok_or(HyperError::BadState)?;
+        if device_once_entry.is_completed() {
+            info!("is_init");
+        } else {
+            info!("not_init");
+        }
+        let temp = PD::new_nimbos(real_vcpu).unwrap();
+        info!("1");
+        device_once_entry.call_once(|| temp);
+        info!("1");
+        Ok(())
+    }
+
     /// Returns a reference to the vCPU with `vcpu_id` if it exists.
     pub fn get_vcpu_and_device(&mut self, vcpu_id: usize) -> HyperResult<(&mut VCpu<H>, &mut PD)> {
         let vcpu = self

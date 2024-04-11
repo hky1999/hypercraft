@@ -78,8 +78,9 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
 
                 if exit_info.exit_reason == VmxExitReason::VMCALL {
                     let regs = vcpu.regs();
+                    info!("{:#x?}", regs);
                     let id = regs.rax as u32;
-                    let args = (regs.rdi as u32, regs.rsi as u32);
+                    let args = (regs.rdi as usize, regs.rsi as usize, regs.rdx as usize);
 
                     match vcpu_device.hypercall_handler(vcpu, id, args) {
                         Ok(result) => vcpu.regs_mut().rax = result as u64,
@@ -114,14 +115,17 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
     #[allow(unreachable_code)]
     /// Run a specified [`VCpu`] on current logical vcpu.
     pub fn run_type15_vcpu(&mut self, vcpu_id: usize, linux: &LinuxContext) -> HyperResult {
+        use memory_addr::PhysAddr;
+
         let (vcpu, vcpu_device) = self.vcpus.get_vcpu_and_device(vcpu_id).unwrap();
         loop {
             if let Some(exit_info) = vcpu.run_type15(linux) {
                 if exit_info.exit_reason == VmxExitReason::VMCALL {
                     let regs = vcpu.regs();
                     let id = regs.rax as u32;
-                    let args = (regs.rdi as u32, regs.rsi as u32);
-
+                    let args = (regs.rdi as usize, regs.rsi as usize, regs.rdx as usize);
+                    
+                    info!("{:#x?}", regs);
                     match vcpu_device.hypercall_handler(vcpu, id, args) {
                         Ok(result) => vcpu.regs_mut().rax = result as u64,
                         Err(e) => panic!("Hypercall failed: {e:?}, hypercall id: {id:#x}, args: {args:#x?}, vcpu: {vcpu:#x?}"),
