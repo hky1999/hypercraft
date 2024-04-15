@@ -826,6 +826,125 @@ impl <H: HyperCraftHal> VmxVcpu<H> {
         })()
         .expect("Failed to read guest control register")
     }
+
+    /// Create a new [`VmxVcpu`].
+    pub fn new_nimbos(
+        vcpu_id: usize,
+        vmcs_revision_id: u32,
+        entry: GuestPhysAddr,
+        ept_root: HostPhysAddr,
+    ) -> HyperResult<Self> {
+        XState::enable_xsave();
+        let mut vcpu = Self {
+            guest_regs: GeneralRegisters::default(),
+            host_stack_top: 0,
+            vcpu_id,
+            launched: false,
+            vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            msr_bitmap: MsrBitmap::passthrough_all()?,
+            pending_events: VecDeque::with_capacity(8),
+            xstate: XState::new(),
+        };
+        // vcpu.setup_msr_bitmap()?;
+        vcpu.setup_nimbos_vmcs(entry, ept_root)?;
+        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
+        Ok(vcpu)
+    }
+
+    fn setup_nimbos_vmcs(&mut self, entry: GuestPhysAddr, ept_root: HostPhysAddr) -> HyperResult {
+        let paddr = self.vmcs.phys_addr() as u64;
+        unsafe {
+            vmx::vmclear(paddr)?;
+        }
+        self.bind_to_current_processor()?;
+        self.setup_vmcs_host()?;
+        self.setup_vmcs_guest(entry)?;
+        self.setup_nimbos_vmcs_control(ept_root)?;
+        self.unbind_from_current_processor()?;
+        Ok(())
+    }
+    fn setup_nimbos_vmcs_control(&mut self, ept_root: HostPhysAddr) -> HyperResult {
+        // Intercept NMI and external interrupts.
+        use super::vmcs::controls::*;
+        use PinbasedControls as PinCtrl;
+        vmcs::set_control(
+            VmcsControl32::PINBASED_EXEC_CONTROLS,
+            Msr::IA32_VMX_TRUE_PINBASED_CTLS,
+            Msr::IA32_VMX_PINBASED_CTLS.read() as u32,
+            (PinCtrl::NMI_EXITING).bits(),
+            0,
+        )?;
+
+        // Intercept all I/O instructions, use MSR bitmaps, activate secondary controls,
+        // disable CR3 load/store interception.
+        use PrimaryControls as CpuCtrl;
+        vmcs::set_control(
+            VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS,
+            Msr::IA32_VMX_TRUE_PROCBASED_CTLS,
+            Msr::IA32_VMX_PROCBASED_CTLS.read() as u32,
+            (CpuCtrl::UNCOND_IO_EXITING | CpuCtrl::USE_MSR_BITMAPS | CpuCtrl::SECONDARY_CONTROLS)
+                .bits(),
+            (CpuCtrl::CR3_LOAD_EXITING | CpuCtrl::CR3_STORE_EXITING | CpuCtrl::CR8_LOAD_EXITING | CpuCtrl::CR8_STORE_EXITING).bits(),
+        )?;
+
+        // Enable EPT, RDTSCP, INVPCID, and unrestricted guest.
+        use SecondaryControls as CpuCtrl2;
+        vmcs::set_control(
+            VmcsControl32::SECONDARY_PROCBASED_EXEC_CONTROLS,
+            Msr::IA32_VMX_PROCBASED_CTLS2,
+            0,
+            (CpuCtrl2::ENABLE_EPT
+                | CpuCtrl2::ENABLE_RDTSCP
+                | CpuCtrl2::ENABLE_INVPCID
+                | CpuCtrl2::UNRESTRICTED_GUEST
+                | CpuCtrl2::ENABLE_XSAVES_XRSTORS)
+                .bits(),
+            0,
+        )?;
+
+        // Switch to 64-bit host, acknowledge interrupt info, switch IA32_PAT/IA32_EFER on VM exit.
+        use ExitControls as ExitCtrl;
+        vmcs::set_control(
+            VmcsControl32::VMEXIT_CONTROLS,
+            Msr::IA32_VMX_TRUE_EXIT_CTLS,
+            Msr::IA32_VMX_EXIT_CTLS.read() as u32,
+            (ExitCtrl::HOST_ADDRESS_SPACE_SIZE
+                | ExitCtrl::ACK_INTERRUPT_ON_EXIT
+                | ExitCtrl::SAVE_IA32_PAT
+                | ExitCtrl::LOAD_IA32_PAT
+                | ExitCtrl::SAVE_IA32_EFER
+                | ExitCtrl::LOAD_IA32_EFER)
+                .bits(),
+            0,
+        )?;
+
+        // Load guest IA32_PAT/IA32_EFER on VM entry.
+        use EntryControls as EntryCtrl;
+        vmcs::set_control(
+            VmcsControl32::VMENTRY_CONTROLS,
+            Msr::IA32_VMX_TRUE_ENTRY_CTLS,
+            Msr::IA32_VMX_ENTRY_CTLS.read() as u32,
+            (EntryCtrl::LOAD_IA32_PAT | EntryCtrl::LOAD_IA32_EFER).bits(),
+            0,
+        )?;
+
+        vmcs::set_ept_pointer(ept_root)?;
+
+        // No MSR switches if hypervisor doesn't use and there is only one vCPU.
+        VmcsControl32::VMEXIT_MSR_STORE_COUNT.write(0)?;
+        VmcsControl32::VMEXIT_MSR_LOAD_COUNT.write(0)?;
+        VmcsControl32::VMENTRY_MSR_LOAD_COUNT.write(0)?;
+
+        // Pass-through exceptions (except #UD(6)), don't use I/O bitmap, set MSR bitmaps.
+        let exception_bitmap: u32 = 1 << 6;
+
+        VmcsControl32::EXCEPTION_BITMAP.write(exception_bitmap)?;
+        VmcsControl64::IO_BITMAP_A_ADDR.write(0)?;
+        VmcsControl64::IO_BITMAP_B_ADDR.write(0)?;
+        VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
+        Ok(())
+    }
+
 }
 
 /// Get ready then vmlaunch or vmresume.
@@ -925,23 +1044,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
             VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
             VmxExitReason::CR_ACCESS => panic!("Guest's access to cr not allowed: {:#x?}, {:#x?}", self, vmcs::cr_access_info()),
-            VmxExitReason::EXCEPTION_NMI => {
-                let int_info = self.interrupt_exit_info().unwrap();
-                info!("hello nmi!! need to do more things...");
-                debug!("exit_info: {:#x?}\nexception: {:#x?}\nvcpu: {:#x?}", exit_info, int_info, self);
-                // self.queue_event(int_info.vector, None);
-
-                // debug!("CR4.OSXSAVE: {}", VmcsGuestNW::CR4.read().unwrap().get_bit(18));
-                
-                // use raw_cpuid::{cpuid, CpuIdResult};
-                // let cpuid_01 = cpuid!(0x1, 0x0);
-                // debug!("CPUID.01H.ECX: {:#x?}, bit26: {}", cpuid_01.ecx, cpuid_01.ecx.get_bit(26));
-
-                // let cpuid_0d_01 = cpuid!(0xd, 0x1);
-                // debug!("CPUID.0DH(ECX=1).EAX: {:#x?}, bit3: {}", cpuid_0d_01.eax, cpuid_0d_01.eax.get_bit(3));
-
-                Some(Ok(()))
-            },
             VmxExitReason::CPUID => Some(self.handle_cpuid()),
             _ => None,
         }

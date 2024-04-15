@@ -88,6 +88,11 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
                     }
 
                     vcpu.advance_rip(VM_EXIT_INSTR_LEN_VMCALL)?;
+                } else if exit_info.exit_reason == VmxExitReason::EXCEPTION_NMI {
+                    match vcpu_device.nmi_handler(vcpu) {
+                        Ok(result) => vcpu.regs_mut().rax = result as u64,
+                        Err(e) => panic!("nmi_handler failed: {e:?}"),
+                    }
                 } else {
                     let result = vcpu_device.vmexit_handler(vcpu, &exit_info)
                         .or_else(|| self.device.vmexit_handler(vcpu, &exit_info));
@@ -132,6 +137,11 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
                     }
 
                     vcpu.advance_rip(VM_EXIT_INSTR_LEN_VMCALL)?;
+                } else if exit_info.exit_reason == VmxExitReason::EXCEPTION_NMI {
+                    match vcpu_device.nmi_handler(vcpu) {
+                        Ok(result) => vcpu.regs_mut().rax = result as u64,
+                        Err(e) => panic!("nmi_handler failed: {e:?}"),
+                    }
                 } else {
                     let result = vcpu_device.vmexit_handler(vcpu, &exit_info);
                     debug!("this is result {:?}", result);
