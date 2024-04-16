@@ -50,7 +50,7 @@ pub use arch::{
     NestedPageTable, PerCpu, VCpu, VM,
 };
 
-pub use hal::HyperCraftHal;
+pub use hal::{HyperCraftHal, PioOps, MmioOps, VirtMsrOps};
 #[cfg(target_arch = "x86_64")]
 pub use hal::{PerCpuDevices, PerVmDevices};
 pub use memory::{
@@ -94,4 +94,10 @@ pub enum HyperError {
     DecodeError,
     /// Disabled.
     Disabled,
+    #[cfg(target_arch = "x86_64")]
+    /// Invalid PIO read.
+    InValidPioRead,
+    #[cfg(target_arch = "x86_64")]
+    /// Invalid PIO write.
+    InValidPioWrite,
 }

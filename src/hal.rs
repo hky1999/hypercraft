@@ -67,3 +67,35 @@ pub trait PerVmDevices<H: HyperCraftHal>: Sized {
     /// Handles vm-exits.
     fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo) -> Option<HyperResult>;
 }
+
+#[cfg(target_arch = "x86_64")]
+/// Vmexit caused by port io operations.
+pub trait PioOps: Send + Sync {
+    /// Port range.
+    fn port_range(&self) -> core::ops::Range<u16>;
+    /// Read operation
+    fn read(&mut self, port: u16, access_size: u8) -> HyperResult<u32>;
+    /// Write operation
+    fn write(&mut self, port: u16, access_size: u8, value: &[u8]) -> HyperResult;
+}
+
+#[cfg(target_arch = "x86_64")]
+/// Vmexit caused by msr operations.
+pub trait VirtMsrOps: Send + Sync {
+    /// Msr range.
+    fn msr_range(&self) -> core::ops::Range<u32>;
+    /// Read operation
+    fn read(&mut self, msr: u32) -> HyperResult<u64>;
+    /// Write operation
+    fn write(&mut self, msr: u32, value: u64) -> HyperResult;
+}
+
+/// Vmexit caused by mmio operations.
+pub trait MmioOps: Send + Sync {
+    /// Mmio range.
+    fn mmio_range(&self) -> core::ops::Range<u64>;
+    /// Read operation
+    fn read(&mut self, addr: u64, access_size: u8) -> HyperResult<u64>;
+    /// Write operation
+    fn write(&mut self, addr: u64, access_size: u8, value: &[u8]) -> HyperResult;
+}
