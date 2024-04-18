@@ -1,4 +1,7 @@
-use crate::{GuestPageTableTrait, HostPageNum, HostPhysAddr, HostVirtAddr, HyperResult, memory::PAGE_SIZE_4K, arch::VCpu, VmExitInfo};
+use crate::{
+    arch::VCpu, memory::PAGE_SIZE_4K, GuestPageTableTrait, HostPageNum, HostPhysAddr, HostVirtAddr,
+    HyperResult, VmExitInfo,
+};
 
 /// The interfaces which the underlginh software(kernel or hypervisor) must implement.
 pub trait HyperCraftHal: Sized {
@@ -50,11 +53,17 @@ pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
     /// Creates a new [`PerCpuDevices`].
     fn new(vcpu: &VCpu<H>) -> HyperResult<Self>;
     /// Handles vm-exits.
-    fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo) -> Option<HyperResult>;
+    fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo)
+        -> Option<HyperResult>;
     /// Handles hypercall.
-    fn hypercall_handler(&mut self, vcpu: &mut VCpu<H>, id: u32, args: (usize, usize, usize)) -> HyperResult<u32>;
+    fn hypercall_handler(
+        &mut self,
+        vcpu: &mut VCpu<H>,
+        id: u32,
+        args: (usize, usize, usize),
+    ) -> HyperResult<u32>;
     /// nmi handler
-    fn nmi_handler(&mut self, vcpu: &mut VCpu<H>) -> HyperResult<u32> ;
+    fn nmi_handler(&mut self, vcpu: &mut VCpu<H>) -> HyperResult<u32>;
     /// Checks whether there are some new events and injects them.
     fn check_events(&mut self, vcpu: &mut VCpu<H>) -> HyperResult;
 }
@@ -65,7 +74,8 @@ pub trait PerVmDevices<H: HyperCraftHal>: Sized {
     /// Creates a new [`PerVmDevices`].
     fn new() -> HyperResult<Self>;
     /// Handles vm-exits.
-    fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo) -> Option<HyperResult>;
+    fn vmexit_handler(&mut self, vcpu: &mut VCpu<H>, exit_info: &VmExitInfo)
+        -> Option<HyperResult>;
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -76,7 +86,7 @@ pub trait PioOps: Send + Sync {
     /// Read operation
     fn read(&mut self, port: u16, access_size: u8) -> HyperResult<u32>;
     /// Write operation
-    fn write(&mut self, port: u16, access_size: u8, value: &[u8]) -> HyperResult;
+    fn write(&mut self, port: u16, access_size: u8, value: u32) -> HyperResult;
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -97,5 +107,33 @@ pub trait MmioOps: Send + Sync {
     /// Read operation
     fn read(&mut self, addr: u64, access_size: u8) -> HyperResult<u64>;
     /// Write operation
-    fn write(&mut self, addr: u64, access_size: u8, value: &[u8]) -> HyperResult;
+    fn write(&mut self, addr: u64, access_size: u8, value: u32) -> HyperResult;
+}
+
+/// Read data from Region to argument `data`,
+/// return `true` if read successfully, or return `false`.
+///
+/// # Arguments
+///
+/// * `offset` - Base address offset.
+/// * `access_size` - Access size.
+type ReadFn = alloc::sync::Arc<dyn Fn(u64, u8) -> HyperResult<u32> + Send + Sync>;
+
+/// Write `data` to memory,
+/// return `true` if write successfully, or return `false`.
+///
+/// # Arguments
+///
+/// * `offset` - Base address offset
+/// * `access_size` - Access size.
+/// * `data` - A u8-type array.
+type WriteFn = alloc::sync::Arc<dyn Fn(u64, u8, &[u8]) -> HyperResult + Send + Sync>;
+
+/// Provide Some operations of `Region`, mainly used by Vm's devices.
+#[derive(Clone)]
+pub struct RegionOps {
+    /// Read data from Region to argument `data`,
+    pub read: ReadFn,
+    /// Write `data` to memory,
+    pub write: WriteFn,
 }
