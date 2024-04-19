@@ -78,7 +78,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
 
                 if exit_info.exit_reason == VmxExitReason::VMCALL {
                     let regs = vcpu.regs();
-                    info!("{:#x?}", regs);
+                    trace!("{:#x?}", regs);
                     let id = regs.rax as u32;
                     let args = (regs.rdi as usize, regs.rsi as usize, regs.rdx as usize);
 
@@ -130,7 +130,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>> VM<H, PD, VD> 
                     let id = regs.rax as u32;
                     let args = (regs.rdi as usize, regs.rsi as usize, regs.rdx as usize);
                     
-                    info!("{:#x?}", regs);
+                    trace!("{:#x?}", regs);
                     match vcpu_device.hypercall_handler(vcpu, id, args) {
                         Ok(result) => vcpu.regs_mut().rax = result as u64,
                         Err(e) => panic!("Hypercall failed: {e:?}, hypercall id: {id:#x}, args: {args:#x?}, vcpu: {vcpu:#x?}"),
