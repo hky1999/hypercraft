@@ -1,7 +1,6 @@
 use alloc::collections::VecDeque;
 use core::fmt::{Debug, Formatter, Result};
 use core::{arch::asm, mem::size_of};
-use x86::msr::IA32_EFER;
 use x86_64::registers::debug;
 
 use bit_field::BitField;
@@ -13,7 +12,7 @@ use x86::segmentation::SegmentSelector;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags, EferFlags};
 
 use super::definitions::VmxExitReason;
-use super::region::{MsrBitmap, VmxRegion};
+use super::region::{IOBitmap, MsrBitmap, VmxRegion};
 #[cfg(feature = "type1_5")]
 use super::segmentation::Segment;
 use super::vmcs::{
@@ -30,7 +29,6 @@ use crate::{
     GuestPhysAddr, GuestVirtAddr, HostPhysAddr, HyperCraftHal, HyperError, HyperResult, VmxExitInfo,
 };
 
-#[derive(Clone)]
 pub struct XState {
     host_xcr0: u64,
     guest_xcr0: u64,
@@ -78,6 +76,7 @@ pub struct VmxVcpu<H: HyperCraftHal> {
     vcpu_id: usize,
     launched: bool,
     vmcs: VmxRegion<H>,
+    io_bitmap: IOBitmap<H>,
     msr_bitmap: MsrBitmap<H>,
     pending_events: VecDeque<(u8, Option<u32>)>,
     xstate: XState,
@@ -98,10 +97,12 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            io_bitmap: IOBitmap::intercept_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
         };
+        vcpu.setup_io_bitmap()?;
         vcpu.setup_msr_bitmap()?;
         vcpu.setup_vmcs(entry, ept_root)?;
         info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
@@ -241,10 +242,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         } else {
             seg_base = VmcsGuestNW::CS_BASE.read().unwrap();
         }
-        debug!(
-            "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
-            seg_base, guest_rip, cpu_mode
-        );
+        // debug!(
+        //     "seg_base: {:#x}, guest_rip: {:#x} cpu mode:{:?}",
+        //     seg_base, guest_rip, cpu_mode
+        // );
         seg_base + guest_rip
     }
 
@@ -279,7 +280,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         GuestPageWalkInfo {
             top_entry,
             level,
-            width: width,
+            width,
             is_user_mode_access,
             is_write_access,
             is_inst_fetch,
@@ -330,11 +331,30 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
 // Implementation of private methods
 impl<H: HyperCraftHal> VmxVcpu<H> {
+    fn setup_io_bitmap(&mut self) -> HyperResult {
+        // By default, I/O bitmap is set as `intercept_all`.
+
+        // Only passthrough serial at 0x3f8 now.
+        let com1 = 0x3f8;
+        self.io_bitmap.set_intercept_of_range(com1, 8, false);
+
+        Ok(())
+    }
+
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
         let msr = x86::msr::IA32_APIC_BASE;
         self.msr_bitmap.set_read_intercept(msr, true);
         self.msr_bitmap.set_write_intercept(msr, true);
+
+        // This is strange, guest Linux's access to `IA32_UMWAIT_CONTROL` will cause an exception.
+        // But if we intercept it, it seems okay.
+        const IA32_UMWAIT_CONTROL: u32 = 0xe1;
+        self.msr_bitmap
+            .set_write_intercept(IA32_UMWAIT_CONTROL, true);
+        self.msr_bitmap
+            .set_read_intercept(IA32_UMWAIT_CONTROL, true);
+
         // Intercept all x2APIC MSR accesses
         for msr in 0x800..=0x83f {
             self.msr_bitmap.set_read_intercept(msr, true);
@@ -393,19 +413,24 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     }
 
     fn setup_vmcs_guest(&mut self, entry: GuestPhysAddr) -> HyperResult {
-        let cr0_guest = Cr0Flags::EXTENSION_TYPE | Cr0Flags::NUMERIC_ERROR;
-        let cr0_host_owned = Cr0Flags::NUMERIC_ERROR; // | Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE;
-        let cr0_read_shadow = Cr0Flags::NUMERIC_ERROR;
-        VmcsGuestNW::CR0.write(cr0_guest.bits() as _)?;
-        VmcsControlNW::CR0_GUEST_HOST_MASK.write(cr0_host_owned.bits() as _)?;
-        VmcsControlNW::CR0_READ_SHADOW.write(cr0_read_shadow.bits() as _)?;
+        let cr0_val: Cr0Flags =
+            Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE | Cr0Flags::EXTENSION_TYPE;
+        self.set_cr(0, cr0_val.bits());
+        self.set_cr(4, 0);
 
-        let cr4_guest = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
-        let cr4_host_owned = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
-        let cr4_read_shadow = 0;
-        VmcsGuestNW::CR4.write(cr4_guest.bits() as _)?;
-        VmcsControlNW::CR4_GUEST_HOST_MASK.write(cr4_host_owned.bits() as _)?;
-        VmcsControlNW::CR4_READ_SHADOW.write(cr4_read_shadow)?;
+        // let cr0_guest = Cr0Flags::EXTENSION_TYPE | Cr0Flags::NUMERIC_ERROR;
+        // let cr0_host_owned = Cr0Flags::NUMERIC_ERROR; // | Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE;
+        // let cr0_read_shadow = Cr0Flags::NUMERIC_ERROR;
+        // VmcsGuestNW::CR0.write(cr0_guest.bits() as _)?;
+        // VmcsControlNW::CR0_GUEST_HOST_MASK.write(cr0_host_owned.bits() as _)?;
+        // VmcsControlNW::CR0_READ_SHADOW.write(cr0_read_shadow.bits() as _)?;
+
+        // let cr4_guest = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
+        // let cr4_host_owned = Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS;
+        // let cr4_read_shadow = 0;
+        // VmcsGuestNW::CR4.write(cr4_guest.bits() as _)?;
+        // VmcsControlNW::CR4_GUEST_HOST_MASK.write(cr4_host_owned.bits() as _)?;
+        // VmcsControlNW::CR4_READ_SHADOW.write(cr4_read_shadow)?;
 
         macro_rules! set_guest_segment {
             ($seg: ident, $access_rights: expr) => {{
@@ -473,7 +498,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_TRUE_PROCBASED_CTLS,
             Msr::IA32_VMX_PROCBASED_CTLS.read() as u32,
-            (CpuCtrl::UNCOND_IO_EXITING | CpuCtrl::USE_MSR_BITMAPS | CpuCtrl::SECONDARY_CONTROLS)
+            (CpuCtrl::USE_IO_BITMAPS | CpuCtrl::USE_MSR_BITMAPS | CpuCtrl::SECONDARY_CONTROLS)
                 .bits(),
             (CpuCtrl::CR3_LOAD_EXITING
                 | CpuCtrl::CR3_STORE_EXITING
@@ -534,8 +559,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         let exception_bitmap: u32 = 1 << 6;
 
         VmcsControl32::EXCEPTION_BITMAP.write(exception_bitmap)?;
-        VmcsControl64::IO_BITMAP_A_ADDR.write(0)?;
-        VmcsControl64::IO_BITMAP_B_ADDR.write(0)?;
+        VmcsControl64::IO_BITMAP_A_ADDR.write(self.io_bitmap.phys_addr().0 as _)?;
+        VmcsControl64::IO_BITMAP_B_ADDR.write(self.io_bitmap.phys_addr().1 as _)?;
         VmcsControl64::MSR_BITMAPS_ADDR.write(self.msr_bitmap.phys_addr() as _)?;
         Ok(())
     }
@@ -563,7 +588,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 }
 
 // Implementaton for type1.5 hypervisor
-#[cfg(feature = "type1_5")]
+// #[cfg(feature = "type1_5")]
 impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Create a new [`VmxVcpu`] for type1.5 hypervisor
     pub fn new_type15(
@@ -580,6 +605,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            io_bitmap: IOBitmap::passthrough_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
@@ -911,6 +937,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     fn set_cr(&mut self, cr_idx: usize, val: u64) {
         (|| -> HyperResult {
+            // debug!("set guest CR{} to val {:#x}", cr_idx, val);
             match cr_idx {
                 0 => {
                     // Retrieve/validate restrictions on CR0
@@ -976,6 +1003,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            io_bitmap: IOBitmap::passthrough_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
@@ -1153,6 +1181,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Try to inject a pending event before next VM entry.
     fn inject_pending_events(&mut self) -> HyperResult {
         if let Some(event) = self.pending_events.front() {
+            // debug!("inject_pending_events vector {:#x}", event.0);
             if event.0 < 32 || self.allow_interrupt() {
                 // if it's an exception, or an interrupt that is not blocked, inject it directly.
                 vmcs::inject_event(event.0, event.1)?;
@@ -1180,14 +1209,49 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
             VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
-            VmxExitReason::CR_ACCESS => panic!(
-                "Guest's access to cr not allowed: {:#x?}, {:#x?}",
-                self,
-                vmcs::cr_access_info()
-            ),
+            VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
             VmxExitReason::CPUID => Some(self.handle_cpuid()),
             _ => None,
         }
+    }
+
+    fn handle_cr(&mut self) -> HyperResult {
+        const VM_EXIT_INSTR_LEN_MV_TO_CR: u8 = 3;
+
+        let cr_access_info = vmcs::cr_access_info()?;
+
+        let reg = cr_access_info.gpr;
+        let cr = cr_access_info.cr_number;
+
+        match cr_access_info.access_type {
+            /* move to cr */
+            0 => {
+                let val = if reg == 4 {
+                    self.stack_pointer() as u64
+                } else {
+                    self.guest_regs.get_reg_of_index(reg)
+                };
+                if cr == 0 || cr == 4 {
+                    // vcpu_skip_emulated_instruction(X86_INST_LEN_MOV_TO_CR);
+                    self.advance_rip(VM_EXIT_INSTR_LEN_MV_TO_CR)?;
+                    /* TODO: check for #GP reasons */
+                    // vmx_set_guest_cr(cr ? CR4_IDX : CR0_IDX, val);
+                    self.set_cr(cr as usize, val);
+
+                    // if (cr == 0 && val & X86_CR0_PG)
+                    if cr == 0 && Cr0Flags::from_bits_truncate(val).contains(Cr0Flags::PAGING) {
+                        vmcs::update_efer()?;
+                    }
+                    return Ok(());
+                }
+            }
+            _ => {}
+        };
+
+        panic!(
+            "Guest's access to cr not allowed: {:#x?}, {:#x?}",
+            self, cr_access_info
+        );
     }
 
     #[cfg(feature = "type1_5")]
