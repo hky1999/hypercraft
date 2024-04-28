@@ -257,7 +257,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
         let mut output = String::new();
         let mut formatter = MasmFormatter::new();
         formatter.format(&instr, &mut output);
-        debug!("Instruction: {}", output);
+        // debug!("Instruction: {}", output);
         Ok(instr)
     }
 
@@ -286,7 +286,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                 content.push(value_ptr.read());
             }
         }
-        debug!("get_gva_content_bytes: content: {:?}", content);
+        // debug!("get_gva_content_bytes: content: {:?}", content);
         Ok(content)
     }
 

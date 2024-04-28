@@ -97,11 +97,12 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vcpu_id,
             launched: false,
             vmcs: VmxRegion::new(vmcs_revision_id, false)?,
-            io_bitmap: IOBitmap::intercept_all()?,
+            io_bitmap: IOBitmap::passthrough_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
         };
+        // Todo: remove these functions.
         vcpu.setup_io_bitmap()?;
         vcpu.setup_msr_bitmap()?;
         vcpu.setup_vmcs(entry, ept_root)?;
@@ -327,16 +328,61 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsControl32::PRIMARY_PROCBASED_EXEC_CONTROLS.write(ctrl)?;
         Ok(())
     }
+
+    /// Set I/O intercept by modifying I/O bitmap.
+    pub fn set_io_intercept_of_range(&mut self, port_base: u32, count: u32, intercept: bool) {
+        self.io_bitmap
+            .set_intercept_of_range(port_base, count, intercept)
+    }
+
+    /// Set msr intercept by modifying msr bitmap.
+    /// Todo: distinguish read and write.
+    pub fn set_msr_intercept_of_range(&mut self, msr: u32, intercept: bool) {
+        self.msr_bitmap.set_read_intercept(msr, intercept);
+        self.msr_bitmap.set_write_intercept(msr, intercept);
+    }
 }
 
 // Implementation of private methods
 impl<H: HyperCraftHal> VmxVcpu<H> {
     fn setup_io_bitmap(&mut self) -> HyperResult {
         // By default, I/O bitmap is set as `intercept_all`.
+        // Todo: these should be combined with emulated pio device management,
+        // in `modules/axvm/src/device/x86_64/mod.rs` somehow.
+        let io_to_be_intercepted = [
+            // Virtual UART
+            // 0x2f8..0x2f8 + 8, // COM2
+            // 0x3e8..0x3e8 + 8, // COM3
+            // 0x2e8..0x2e8 + 8, // COM4
+            // Virual PIC
+            0x20..0x20 + 2, // PIC1
+            0xa0..0xa0 + 2, // PIC2
+            // Debug Port
+            // 0x80..0x80 + 1,   // Debug Port
+            //
+            // 0x92..0x92 + 1,
+            // 0x61..0x61 + 1,
+            // RTC
+            // 0x70..0x70 + 2,   // CMOS
+            // 0x40..0x40 + 4,   // PIT
+            // 0xf0..0xf0 + 2,   // ports about fpu
+            // 0x3d4..0x3d4 + 2, // ports about vga
+            // 0x87..0x87 + 1,   // port about dma
+            // 0x60..0x60 + 1,   // ports about ps/2 controller
+            // 0x64..0x64 + 1,   // ports about ps/2 controller
+            0xcf8..0xcf8 + 8, // PCI
+        ];
+        for port_range in io_to_be_intercepted {
+            self.io_bitmap.set_intercept_of_range(
+                port_range.start,
+                port_range.count() as u32,
+                true,
+            );
+        }
 
-        // Only passthrough serial at 0x3f8 now.
-        let com1 = 0x3f8;
-        self.io_bitmap.set_intercept_of_range(com1, 8, false);
+        // // Only passthrough serial at 0x3f8 now.
+        // let com1 = 0x3f8;
+        // self.io_bitmap.set_intercept_of_range(com1, 8, false);
 
         Ok(())
     }
@@ -1260,6 +1306,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
         const VM_EXIT_INSTR_LEN_CPUID: u8 = 2;
         const LEAF_FEATURE_INFO: u32 = 0x1;
+
+        const EAX_FREQUENCY_INFO: u32 = 0x16;
+
         const LEAF_HYPERVISOR_INFO: u32 = 0x4000_0000;
         const LEAF_HYPERVISOR_FEATURE: u32 = 0x4000_0001;
         const VENDOR_STR: &[u8; 12] = b"RVMRVMRVMRVM";
@@ -1296,6 +1345,18 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 flags |= !VMX;
                 flags |= HYPERVISOR;
                 guest_regs.rcx = flags;
+            } else if function == EAX_FREQUENCY_INFO {
+                /// Timer interrupt frequencyin Hz.
+                /// Todo: this should be the same as `axconfig::TIMER_FREQUENCY` defined in ArceOS's config file.
+                const TIMER_FREQUENCY_MHz: u64 = 3_000;
+
+                if res.eax == 0 {
+                    warn!(
+                        "Failed to get TSC frequency by CPUID, default to {} MHz",
+                        TIMER_FREQUENCY_MHz
+                    );
+                    guest_regs.rax = TIMER_FREQUENCY_MHz;
+                }
             }
         }
         // debug!("cpuid return guest_regs:{:#x?}", guest_regs);
