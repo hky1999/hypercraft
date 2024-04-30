@@ -355,8 +355,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             // 0x3e8..0x3e8 + 8, // COM3
             // 0x2e8..0x2e8 + 8, // COM4
             // Virual PIC
-            0x20..0x20 + 2, // PIC1
-            0xa0..0xa0 + 2, // PIC2
+            // 0x20..0x20 + 2, // PIC1
+            // 0xa0..0xa0 + 2, // PIC2
             // Debug Port
             // 0x80..0x80 + 1,   // Debug Port
             //
@@ -364,7 +364,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             // 0x61..0x61 + 1,
             // RTC
             // 0x70..0x70 + 2,   // CMOS
-            // 0x40..0x40 + 4,   // PIT
+            // 0x40..0x40 + 4, // PIT
             // 0xf0..0xf0 + 2,   // ports about fpu
             // 0x3d4..0x3d4 + 2, // ports about vga
             // 0x87..0x87 + 1,   // port about dma
@@ -389,9 +389,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
-        let msr = x86::msr::IA32_APIC_BASE;
-        self.msr_bitmap.set_read_intercept(msr, true);
-        self.msr_bitmap.set_write_intercept(msr, true);
+        // let msr = x86::msr::IA32_APIC_BASE;
+        // self.msr_bitmap.set_read_intercept(msr, true);
+        // self.msr_bitmap.set_write_intercept(msr, true);
 
         // This is strange, guest Linux's access to `IA32_UMWAIT_CONTROL` will cause an exception.
         // But if we intercept it, it seems okay.
@@ -402,10 +402,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             .set_read_intercept(IA32_UMWAIT_CONTROL, true);
 
         // Intercept all x2APIC MSR accesses
-        for msr in 0x800..=0x83f {
-            self.msr_bitmap.set_read_intercept(msr, true);
-            self.msr_bitmap.set_write_intercept(msr, true);
-        }
+        // for msr in 0x800..=0x83f {
+        //     self.msr_bitmap.set_read_intercept(msr, true);
+        //     self.msr_bitmap.set_write_intercept(msr, true);
+        // }
         Ok(())
     }
 
@@ -455,6 +455,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         VmcsHostNW::IA32_SYSENTER_ESP.write(0)?;
         VmcsHostNW::IA32_SYSENTER_EIP.write(0)?;
         VmcsHost32::IA32_SYSENTER_CS.write(0)?;
+
         Ok(())
     }
 
@@ -789,49 +790,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             vmx::vmclear(paddr)?;
         }
         self.bind_to_current_processor()?;
-        self.setup_type15_vmcs_host()?;
+        self.setup_vmcs_host()?;
         self.setup_type15_vmcs_guest(linux)?;
         self.setup_type15_vmcs_control(ept_root)?;
         self.unbind_from_current_processor()?;
-        Ok(())
-    }
-
-    fn setup_type15_vmcs_host(&mut self) -> HyperResult {
-        use x86::Ring;
-        VmcsHost64::IA32_PAT.write(Msr::IA32_PAT.read())?;
-        VmcsHost64::IA32_EFER.write(Msr::IA32_EFER.read())?;
-
-        VmcsHostNW::CR0.write(Cr0::read_raw() as _)?;
-        VmcsHostNW::CR3.write(Cr3::read_raw().0.start_address().as_u64() as _)?;
-        VmcsHostNW::CR4.write(Cr4::read_raw() as _)?;
-
-        VmcsHost16::ES_SELECTOR.write(0)?;
-        VmcsHost16::CS_SELECTOR.write(SegmentSelector::new(2, Ring::Ring0).bits())?;
-        VmcsHost16::SS_SELECTOR.write(0)?;
-        VmcsHost16::DS_SELECTOR.write(0)?;
-        VmcsHost16::FS_SELECTOR.write(0)?;
-        VmcsHost16::GS_SELECTOR.write(0)?;
-        VmcsHost16::TR_SELECTOR.write(SegmentSelector::new(7, Ring::Ring0).bits())?;
-        VmcsHostNW::FS_BASE.write(0)?;
-        VmcsHostNW::GS_BASE.write(Msr::IA32_GS_BASE.read() as _)?;
-        VmcsHostNW::TR_BASE.write(0)?;
-
-        let mut gdtp = DescriptorTablePointer::<u64>::default();
-        let mut idtp = DescriptorTablePointer::<u64>::default();
-        unsafe {
-            dtables::sgdt(&mut gdtp);
-            dtables::sidt(&mut idtp);
-        }
-        VmcsHostNW::GDTR_BASE.write(gdtp.base as _)?;
-        VmcsHostNW::IDTR_BASE.write(idtp.base as _)?;
-
-        VmcsHostNW::IA32_SYSENTER_ESP.write(0)?;
-        VmcsHostNW::IA32_SYSENTER_EIP.write(0)?;
-        VmcsHost32::IA32_SYSENTER_CS.write(0)?;
-
-        // TODO: RSP
-        VmcsHostNW::RIP.write(Self::vmx_exit as usize)?;
-
         Ok(())
     }
 
