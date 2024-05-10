@@ -1,6 +1,7 @@
 use alloc::collections::VecDeque;
 use core::fmt::{Debug, Formatter, Result};
 use core::{arch::asm, mem::size_of};
+use x86::vmx::vmcs::guest::VMX_PREEMPTION_TIMER_VALUE;
 use x86_64::registers::debug;
 
 use bit_field::BitField;
@@ -28,6 +29,8 @@ use crate::arch::{
 use crate::{
     GuestPhysAddr, GuestVirtAddr, HostPhysAddr, HyperCraftHal, HyperError, HyperResult, VmxExitInfo,
 };
+
+static mut VMX_PREEMPTION_TIMER_SET_VALUE: u32 = 1000_000;
 
 pub struct XState {
     host_xcr0: u64,
@@ -80,6 +83,7 @@ pub struct VmxVcpu<H: HyperCraftHal> {
     msr_bitmap: MsrBitmap<H>,
     pending_events: VecDeque<(u8, Option<u32>)>,
     xstate: XState,
+    is_host: bool,
 }
 
 impl<H: HyperCraftHal> VmxVcpu<H> {
@@ -101,6 +105,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
+            is_host: false,
         };
         // Todo: remove these functions.
         vcpu.setup_io_bitmap()?;
@@ -350,26 +355,27 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // Todo: these should be combined with emulated pio device management,
         // in `modules/axvm/src/device/x86_64/mod.rs` somehow.
         let io_to_be_intercepted = [
-            // Virtual UART
+            // UART
+            // 0x3f8..0x3f8 + 8, // COM1
             // 0x2f8..0x2f8 + 8, // COM2
             // 0x3e8..0x3e8 + 8, // COM3
             // 0x2e8..0x2e8 + 8, // COM4
             // Virual PIC
-            // 0x20..0x20 + 2, // PIC1
-            // 0xa0..0xa0 + 2, // PIC2
+            0x20..0x20 + 2, // PIC1
+            0xa0..0xa0 + 2, // PIC2
             // Debug Port
             // 0x80..0x80 + 1,   // Debug Port
             //
-            // 0x92..0x92 + 1,
-            // 0x61..0x61 + 1,
+            0x92..0x92 + 1, // system_control_a
+            0x61..0x61 + 1, // system_control_b
             // RTC
-            // 0x70..0x70 + 2,   // CMOS
-            // 0x40..0x40 + 4, // PIT
+            0x70..0x70 + 2, // CMOS
+            0x40..0x40 + 4, // PIT
             // 0xf0..0xf0 + 2,   // ports about fpu
             // 0x3d4..0x3d4 + 2, // ports about vga
-            // 0x87..0x87 + 1,   // port about dma
-            // 0x60..0x60 + 1,   // ports about ps/2 controller
-            // 0x64..0x64 + 1,   // ports about ps/2 controller
+            0x87..0x87 + 1,   // port about dma
+            0x60..0x60 + 1,   // ports about ps/2 controller
+            0x64..0x64 + 1,   // ports about ps/2 controller
             0xcf8..0xcf8 + 8, // PCI
         ];
         for port_range in io_to_be_intercepted {
@@ -389,9 +395,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
-        // let msr = x86::msr::IA32_APIC_BASE;
-        // self.msr_bitmap.set_read_intercept(msr, true);
-        // self.msr_bitmap.set_write_intercept(msr, true);
+        let msr = x86::msr::IA32_APIC_BASE;
+        self.msr_bitmap.set_read_intercept(msr, true);
+        self.msr_bitmap.set_write_intercept(msr, true);
 
         // This is strange, guest Linux's access to `IA32_UMWAIT_CONTROL` will cause an exception.
         // But if we intercept it, it seems okay.
@@ -402,10 +408,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             .set_read_intercept(IA32_UMWAIT_CONTROL, true);
 
         // Intercept all x2APIC MSR accesses
-        // for msr in 0x800..=0x83f {
-        //     self.msr_bitmap.set_read_intercept(msr, true);
-        //     self.msr_bitmap.set_write_intercept(msr, true);
-        // }
+        for msr in 0x800..=0x83f {
+            self.msr_bitmap.set_read_intercept(msr, true);
+            self.msr_bitmap.set_write_intercept(msr, true);
+        }
         Ok(())
     }
 
@@ -517,7 +523,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
         VmcsGuest32::INTERRUPTIBILITY_STATE.write(0)?;
         VmcsGuest32::ACTIVITY_STATE.write(0)?;
-        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(0)?;
+
+        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(unsafe { VMX_PREEMPTION_TIMER_SET_VALUE })?;
 
         VmcsGuest64::LINK_PTR.write(u64::MAX)?; // SDM Vol. 3C, Section 24.4.2
         VmcsGuest64::IA32_DEBUGCTL.write(0)?;
@@ -534,7 +541,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             VmcsControl32::PINBASED_EXEC_CONTROLS,
             Msr::IA32_VMX_TRUE_PINBASED_CTLS,
             Msr::IA32_VMX_PINBASED_CTLS.read() as u32,
-            (PinCtrl::NMI_EXITING | PinCtrl::EXTERNAL_INTERRUPT_EXITING).bits(),
+            // (PinCtrl::NMI_EXITING | PinCtrl::EXTERNAL_INTERRUPT_EXITING).bits(),
+            (PinCtrl::NMI_EXITING | PinCtrl::VMX_PREEMPTION_TIMER).bits(),
             0,
         )?;
 
@@ -656,6 +664,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
+            is_host: true,
         };
         // vcpu.setup_type15_msr_bitmap()?;
         vcpu.setup_type15_vmcs(ept_root, linux)?;
@@ -1015,6 +1024,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
             xstate: XState::new(),
+            is_host: false,
         };
         // vcpu.setup_msr_bitmap()?;
         vcpu.setup_nimbos_vmcs(entry, ept_root)?;
@@ -1189,7 +1199,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Try to inject a pending event before next VM entry.
     fn inject_pending_events(&mut self) -> HyperResult {
         if let Some(event) = self.pending_events.front() {
-            // debug!("inject_pending_events vector {:#x}", event.0);
+            // debug!(
+            //     "inject_pending_events vector {:#x} allow_int {}",
+            //     event.0,
+            //     self.allow_interrupt()
+            // );
             if event.0 < 32 || self.allow_interrupt() {
                 // if it's an exception, or an interrupt that is not blocked, inject it directly.
                 vmcs::inject_event(event.0, event.1)?;
@@ -1216,11 +1230,26 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // - cr access: just panic;
         match exit_info.exit_reason {
             VmxExitReason::INTERRUPT_WINDOW => Some(self.set_interrupt_window(false)),
+            VmxExitReason::PREEMPTION_TIMER => Some(self.handle_vmx_preemption_timer()),
             VmxExitReason::XSETBV => Some(self.handle_xsetbv()),
             VmxExitReason::CR_ACCESS => Some(self.handle_cr()),
-            VmxExitReason::CPUID => Some(self.handle_cpuid()),
+            VmxExitReason::CPUID => Some(if self.is_host {
+                self.handle_host_cpuid()
+            } else {
+                self.handle_cpuid()
+            }),
             _ => None,
         }
+    }
+
+    fn handle_vmx_preemption_timer(&mut self) -> HyperResult {
+        /*
+        The VMX-preemption timer counts down at rate proportional to that of the timestamp counter (TSC).
+        Specifically, the timer counts down by 1 every time bit X in the TSC changes due to a TSC increment.
+        The value of X is in the range 0–31 and can be determined by consulting the VMX capability MSR IA32_VMX_MISC (see Appendix A.6).
+         */
+        VmcsGuest32::VMX_PREEMPTION_TIMER_VALUE.write(unsafe { VMX_PREEMPTION_TIMER_SET_VALUE })?;
+        Ok(())
     }
 
     fn handle_cr(&mut self) -> HyperResult {
@@ -1263,7 +1292,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     }
 
     #[cfg(feature = "type1_5")]
-    fn handle_cpuid(&mut self) -> HyperResult {
+    fn handle_host_cpuid(&mut self) -> HyperResult {
         use raw_cpuid::{cpuid, CpuIdResult};
 
         const VM_EXIT_INSTR_LEN_CPUID: u8 = 2;
@@ -1314,7 +1343,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
                 if res.eax == 0 {
                     warn!(
-                        "Failed to get TSC frequency by CPUID, default to {} MHz",
+                        "handle_host_cpuid: Failed to get TSC frequency by CPUID, default to {} MHz",
                         TIMER_FREQUENCY_MHz
                     );
                     guest_regs.rax = TIMER_FREQUENCY_MHz;
@@ -1326,7 +1355,6 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(())
     }
 
-    #[cfg(not(feature = "type1_5"))]
     fn handle_cpuid(&mut self) -> HyperResult {
         use raw_cpuid::{cpuid, CpuIdResult};
 
@@ -1334,6 +1362,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         const LEAF_FEATURE_INFO: u32 = 0x1;
         const LEAF_STRUCTURED_EXTENDED_FEATURE_FLAGS_ENUMERATION: u32 = 0x7;
         const LEAF_PROCESSOR_EXTENDED_STATE_ENUMERATION: u32 = 0xd;
+        const EAX_FREQUENCY_INFO: u32 = 0x16;
         const LEAF_HYPERVISOR_INFO: u32 = 0x4000_0000;
         const LEAF_HYPERVISOR_FEATURE: u32 = 0x4000_0001;
         const VENDOR_STR: &[u8; 12] = b"RVMRVMRVMRVM";
@@ -1377,6 +1406,20 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 ecx: 0,
                 edx: 0,
             },
+            EAX_FREQUENCY_INFO => {
+                /// Timer interrupt frequencyin Hz.
+                /// Todo: this should be the same as `axconfig::TIMER_FREQUENCY` defined in ArceOS's config file.
+                const TIMER_FREQUENCY_MHz: u32 = 3_000;
+                let mut res = cpuid!(regs_clone.rax, regs_clone.rcx);
+                if res.eax == 0 {
+                    warn!(
+                        "handle_cpuid: Failed to get TSC frequency by CPUID, default to {} MHz",
+                        TIMER_FREQUENCY_MHz
+                    );
+                    res.eax = TIMER_FREQUENCY_MHz;
+                }
+                res
+            }
             _ => cpuid!(regs_clone.rax, regs_clone.rcx),
         };
 
