@@ -356,7 +356,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // in `modules/axvm/src/device/x86_64/mod.rs` somehow.
         let io_to_be_intercepted = [
             // UART
-            // 0x3f8..0x3f8 + 8, // COM1
+            // We need to intercepted the access to COM1 ports.
+            // Because we want to reserve this port for host Linux.
+            0x3f8..0x3f8 + 8, // COM1
             // 0x2f8..0x2f8 + 8, // COM2
             // 0x3e8..0x3e8 + 8, // COM3
             // 0x2e8..0x2e8 + 8, // COM4
@@ -385,19 +387,14 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
                 true,
             );
         }
-
-        // // Only passthrough serial at 0x3f8 now.
-        // let com1 = 0x3f8;
-        // self.io_bitmap.set_intercept_of_range(com1, 8, false);
-
         Ok(())
     }
 
     fn setup_msr_bitmap(&mut self) -> HyperResult {
         // Intercept IA32_APIC_BASE MSR accesses
-        let msr = x86::msr::IA32_APIC_BASE;
-        self.msr_bitmap.set_read_intercept(msr, true);
-        self.msr_bitmap.set_write_intercept(msr, true);
+        // let msr = x86::msr::IA32_APIC_BASE;
+        // self.msr_bitmap.set_read_intercept(msr, true);
+        // self.msr_bitmap.set_write_intercept(msr, true);
 
         // This is strange, guest Linux's access to `IA32_UMWAIT_CONTROL` will cause an exception.
         // But if we intercept it, it seems okay.
@@ -408,10 +405,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             .set_read_intercept(IA32_UMWAIT_CONTROL, true);
 
         // Intercept all x2APIC MSR accesses
-        for msr in 0x800..=0x83f {
-            self.msr_bitmap.set_read_intercept(msr, true);
-            self.msr_bitmap.set_write_intercept(msr, true);
-        }
+        // for msr in 0x800..=0x83f {
+        //     self.msr_bitmap.set_read_intercept(msr, true);
+        //     self.msr_bitmap.set_write_intercept(msr, true);
+        // }
         Ok(())
     }
 
