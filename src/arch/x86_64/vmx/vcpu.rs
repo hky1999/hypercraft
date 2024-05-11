@@ -356,10 +356,10 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // in `modules/axvm/src/device/x86_64/mod.rs` somehow.
         let io_to_be_intercepted = [
             // UART
-            // We need to intercepted the access to COM1 ports.
+            // 0x3f8..0x3f8 + 8, // COM1
+            // We need to intercepted the access to COM2 ports.
             // Because we want to reserve this port for host Linux.
-            0x3f8..0x3f8 + 8, // COM1
-            // 0x2f8..0x2f8 + 8, // COM2
+            0x2f8..0x2f8 + 8, // COM2
             // 0x3e8..0x3e8 + 8, // COM3
             // 0x2e8..0x2e8 + 8, // COM4
             // Virual PIC
