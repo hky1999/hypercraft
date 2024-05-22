@@ -59,6 +59,7 @@ pub struct VM<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: Gu
     vcpus: VmCpus<H, PD>,
     vcpu_bond: BitSet,
     device: VD,
+    vm_id: u32,
     /// EPT
     pub ept: Arc<G>,
 }
@@ -67,11 +68,12 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
     VM<H, PD, VD, G>
 {
     /// Create a new [`VM`].
-    pub fn new(vcpus: VmCpus<H, PD>, ept: Arc<G>) -> Self {
+    pub fn new(vcpus: VmCpus<H, PD>, ept: Arc<G>, vm_id: u32) -> Self {
         Self {
             vcpus,
             vcpu_bond: BitSet::new(),
-            device: VD::new().unwrap(),
+            device: VD::new(vm_id).unwrap(),
+            vm_id,
             ept,
         }
     }

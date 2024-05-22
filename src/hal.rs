@@ -73,7 +73,7 @@ pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
 /// Virtual devices of a vm.
 pub trait PerVmDevices<H: HyperCraftHal>: Sized {
     /// Creates a new [`PerVmDevices`].
-    fn new() -> HyperResult<Self>;
+    fn new(vm_id: u32) -> HyperResult<Self>;
     /// Handles vm-exits.
     fn vmexit_handler(
         &mut self,
