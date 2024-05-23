@@ -144,12 +144,12 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                             if exit_info.exit_reason == VmxExitReason::IO_INSTRUCTION {
                                 let io_info = vcpu.io_exit_info().unwrap();
                                 panic!(
-                                    "nobody wants to handle this vm-exit: {:?}, io-info: {:?}",
+                                    "nobody wants to handle this vm-exit: {:#x?}, io-info: {:?}",
                                     exit_info, io_info
                                 );
                             } else {
                                 panic!(
-                                    "nobody wants to handle this vm-exit: {:?}, vcpu: {:#x?}",
+                                    "nobody wants to handle this vm-exit: {:#x?}, vcpu: {:#x?}",
                                     exit_info, vcpu
                                 );
                             }
@@ -201,7 +201,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                         Some(result) => {
                             if result.is_err() {
                                 panic!(
-                                    "VM failed to handle a vm-exit: {:?}, error {:?}, vcpu: {:#x?}",
+                                    "VM failed to handle a vm-exit: {:#x?}, error {:?}, vcpu: {:#x?}",
                                     exit_info.exit_reason,
                                     result.unwrap_err(),
                                     vcpu
@@ -210,7 +210,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                         }
                         None => {
                             panic!(
-                                "nobody wants to handle this vm-exit: {:?}, vcpu: {:#x?}",
+                                "nobody wants to handle this vm-exit: {:#x?}, vcpu: {:#x?}",
                                 exit_info, vcpu
                             );
                         }
