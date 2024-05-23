@@ -66,7 +66,7 @@ pub use arch::lower_aarch64_synchronous;
 
 use alloc::string::String;
 #[cfg(target_arch = "x86_64")]
-pub use arch::{GuestPageWalkInfo, VmxExitInfo, VmxExitReason};
+pub use arch::{GuestPageWalkInfo, VmxExitInfo, VmxExitReason, VmxInterruptionType};
 
 /// The error type for hypervisor operation failures.
 #[derive(Debug, PartialEq)]
@@ -101,6 +101,8 @@ pub enum HyperError {
     #[cfg(target_arch = "x86_64")]
     /// Invalid PIO write.
     InValidPioWrite,
+    /// Invalid Mmio
+    InValidMmio,
     /// Invalid Mmio read
     InValidMmioRead,
     /// Invalid Mmio write
@@ -109,6 +111,12 @@ pub enum HyperError {
     PciError(PciError),
     /// Virtio Error
     VirtioError(VirtioError),
+    /// Operand Not Supported
+    OperandNotSupported,
+    /// Instruction Not Supported
+    InstructionNotSupported,
+    /// Invalid Bar Address
+    InvalidBarAddress,
 }
 
 /// The result type for hypervisor operation.

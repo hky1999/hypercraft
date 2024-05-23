@@ -581,17 +581,6 @@ pub mod controls {
     pub use x86::vmx::vmcs::control::{EntryControls, ExitControls};
     pub use x86::vmx::vmcs::control::{PinbasedControls, PrimaryControls, SecondaryControls};
 }
-#[cfg(feature = "type1_5")]
-pub fn set_control_type15(
-    field: VmcsControl32,
-    old_msr: u64,
-    set: u32,
-    clear: u32,
-) -> HyperResult<()> {
-    assert_eq!((set & clear), 0);
-    field.write((old_msr as u32) & !clear | set)?;
-    Ok(())
-}
 
 pub fn set_control(
     control: VmcsControl32,
@@ -609,15 +598,24 @@ pub fn set_control(
         control, old_value, set, clear
     );
     if (set & clear) != 0 {
+        warn!("failed because (+{:#x} & -{:#x}) != 0", set, clear);
         return Err(HyperError::InvalidParam);
     }
     if (allowed1 & set) != set {
+        warn!(
+            "{:?} not fully enabled: set {:#x}  allowed1 {:#x}\n",
+            control, set, allowed1
+        );
         // failed if set 0-bits in allowed1
-        return Err(HyperError::InvalidParam);
+        // return Err(HyperError::InvalidParam);
     }
     if (allowed0 & clear) != 0 {
+        warn!(
+            "{:?} not fully enabled: clear {:#x} allowed0 {:#x}\n",
+            control, clear, allowed0
+        );
         // failed if clear 1-bits in allowed0
-        return Err(HyperError::InvalidParam);
+        // return Err(HyperError::InvalidParam);
     }
     // SDM Vol. 3C, Section 31.5.1, Algorithm 3
     let flexible = !allowed0 & allowed1; // therse bits can be either 0 or 1
@@ -680,6 +678,10 @@ pub fn exit_info() -> HyperResult<VmxExitInfo> {
         exit_instruction_length: VmcsReadOnly32::VMEXIT_INSTRUCTION_LEN.read()?,
         guest_rip: VmcsGuestNW::RIP.read()?,
     })
+}
+
+pub fn raw_interrupt_exit_info() -> HyperResult<u32> {
+    Ok(VmcsReadOnly32::VMEXIT_INTERRUPTION_INFO.read()?)
 }
 
 pub fn interrupt_exit_info() -> HyperResult<VmxInterruptInfo> {
@@ -754,7 +756,6 @@ pub fn update_efer() -> HyperResult {
     let efer = VmcsGuest64::IA32_EFER.read()?;
     let mut guest_efer = EferFlags::from_bits_truncate(efer);
 
-    // if ((efer & (EFER_LME | EFER_LMA)) != EFER_LME)
     if guest_efer.contains(EferFlags::LONG_MODE_ENABLE)
         && guest_efer.contains(EferFlags::LONG_MODE_ACTIVE)
     {

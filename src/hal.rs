@@ -73,7 +73,7 @@ pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
 /// Virtual devices of a vm.
 pub trait PerVmDevices<H: HyperCraftHal>: Sized {
     /// Creates a new [`PerVmDevices`].
-    fn new() -> HyperResult<Self>;
+    fn new(vm_id: u32) -> HyperResult<Self>;
     /// Handles vm-exits.
     fn vmexit_handler(
         &mut self,
@@ -112,7 +112,7 @@ pub trait MmioOps: Send + Sync {
     /// Read operation
     fn read(&mut self, addr: u64, access_size: u8) -> HyperResult<u64>;
     /// Write operation
-    fn write(&mut self, addr: u64, access_size: u8, value: u32) -> HyperResult;
+    fn write(&mut self, addr: u64, access_size: u8, value: u64) -> HyperResult;
 }
 
 /// Read data from Region to argument `data`,
@@ -122,7 +122,7 @@ pub trait MmioOps: Send + Sync {
 ///
 /// * `offset` - Base address offset.
 /// * `access_size` - Access size.
-type ReadFn = alloc::sync::Arc<dyn Fn(u64, u8) -> HyperResult<u32> + Send + Sync>;
+type ReadFn = alloc::sync::Arc<dyn Fn(u64, u8) -> HyperResult<u64> + Send + Sync>;
 
 /// Write `data` to memory,
 /// return `true` if write successfully, or return `false`.

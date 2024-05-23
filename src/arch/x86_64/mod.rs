@@ -43,7 +43,7 @@ pub use ept::GuestPageWalkInfo;
 pub use percpu::PerCpu;
 /// VCpu define.
 pub use vmx::VmxVcpu as VCpu;
-pub use vmx::{VmxExitInfo, VmxExitReason};
+pub use vmx::{VmxExitInfo, VmxExitReason, VmxInterruptionType};
 
 // pub use device::{Devices, PortIoDevice};
 
@@ -59,6 +59,7 @@ pub struct VM<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: Gu
     vcpus: VmCpus<H, PD>,
     vcpu_bond: BitSet,
     device: VD,
+    vm_id: u32,
     /// EPT
     pub ept: Arc<G>,
 }
@@ -67,11 +68,12 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
     VM<H, PD, VD, G>
 {
     /// Create a new [`VM`].
-    pub fn new(vcpus: VmCpus<H, PD>, ept: Arc<G>) -> Self {
+    pub fn new(vcpus: VmCpus<H, PD>, ept: Arc<G>, vm_id: u32) -> Self {
         Self {
             vcpus,
             vcpu_bond: BitSet::new(),
-            device: VD::new().unwrap(),
+            device: VD::new(vm_id).unwrap(),
+            vm_id,
             ept,
         }
     }
@@ -139,10 +141,18 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                             }
                         }
                         None => {
-                            panic!(
-                                "nobody wants to handle this vm-exit: {:?}, vcpu: {:#x?}",
-                                exit_info, vcpu
-                            );
+                            if exit_info.exit_reason == VmxExitReason::IO_INSTRUCTION {
+                                let io_info = vcpu.io_exit_info().unwrap();
+                                panic!(
+                                    "nobody wants to handle this vm-exit: {:#x?}, io-info: {:?}",
+                                    exit_info, io_info
+                                );
+                            } else {
+                                panic!(
+                                    "nobody wants to handle this vm-exit: {:#x?}, vcpu: {:#x?}",
+                                    exit_info, vcpu
+                                );
+                            }
                         }
                     }
                 }
@@ -191,7 +201,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                         Some(result) => {
                             if result.is_err() {
                                 panic!(
-                                    "VM failed to handle a vm-exit: {:?}, error {:?}, vcpu: {:#x?}",
+                                    "VM failed to handle a vm-exit: {:#x?}, error {:?}, vcpu: {:#x?}",
                                     exit_info.exit_reason,
                                     result.unwrap_err(),
                                     vcpu
@@ -200,7 +210,7 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                         }
                         None => {
                             panic!(
-                                "nobody wants to handle this vm-exit: {:?}, vcpu: {:#x?}",
+                                "nobody wants to handle this vm-exit: {:#x?}, vcpu: {:#x?}",
                                 exit_info, vcpu
                             );
                         }
@@ -209,7 +219,8 @@ impl<H: HyperCraftHal, PD: PerCpuDevices<H>, VD: PerVmDevices<H>, G: GuestPageTa
                 // debug!("test decode instruction");
                 // let guest_rip = exit_info.guest_rip;
                 // let length = exit_info.exit_instruction_length;
-                // let _instr = Self::decode_instr(self.ept.clone(), vcpu, guest_rip, length)?;
+                // let instr = Self::decode_instr(self.ept.clone(), vcpu, guest_rip, length)?;
+                // debug!("this is instr {:?}", instr);
             }
             // vcpu_device.check_events(vcpu)?;
         }
