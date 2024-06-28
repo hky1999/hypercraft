@@ -12,9 +12,9 @@ pub struct VmxRegion<H: HyperCraftHal> {
 }
 
 impl<H: HyperCraftHal> VmxRegion<H> {
-    pub const unsafe fn uninit() -> Self {
+    pub const fn uninit() -> Self {
         Self {
-            frame: PhysFrame::uninit(),
+            frame: unsafe { PhysFrame::uninit() },
         }
     }
 

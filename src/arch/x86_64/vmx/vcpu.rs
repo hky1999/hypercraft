@@ -90,9 +90,9 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Create a new [`VmxVcpu`].
     pub fn new(
         vcpu_id: usize,
-        vmcs_revision_id: u32,
-        entry: GuestPhysAddr,
-        ept_root: HostPhysAddr,
+        // vmcs_revision_id: u32,
+        // entry: GuestPhysAddr,
+        // ept_root: HostPhysAddr,
     ) -> HyperResult<Self> {
         XState::enable_xsave();
         let mut vcpu = Self {
@@ -100,7 +100,8 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             host_stack_top: 0,
             vcpu_id,
             launched: false,
-            vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            // vmcs: VmxRegion::new(vmcs_revision_id, false)?,
+            vmcs: VmxRegion::uninit(),
             io_bitmap: IOBitmap::passthrough_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
@@ -108,11 +109,24 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             is_host: false,
         };
         // Todo: remove these functions.
-        vcpu.setup_io_bitmap()?;
-        vcpu.setup_msr_bitmap()?;
-        vcpu.setup_vmcs(entry, ept_root)?;
-        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
+        // vcpu.setup_io_bitmap()?;
+        // vcpu.setup_msr_bitmap()?;
+        // vcpu.setup_vmcs(entry, ept_root)?;
+        // info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
         Ok(vcpu)
+    }
+
+    pub fn setup_from_host(&mut self, ept_root: HostPhysAddr, linux: &LinuxContext) -> HyperResult {
+        self.setup_type15_vmcs(ept_root, linux)?;
+        let regs = self.regs_mut();
+        regs.rax = 0;
+        regs.rbx = linux.rbx;
+        regs.rbp = linux.rbp;
+        regs.r12 = linux.r12;
+        regs.r13 = linux.r13;
+        regs.r14 = linux.r14;
+        regs.r15 = linux.r15;
+        Ok(())
     }
 
     /// Get the identifier of this [`VmxVcpu`].

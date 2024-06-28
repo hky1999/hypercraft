@@ -2,10 +2,11 @@ use crate::{
     arch::VCpu, memory::PAGE_SIZE_4K, GuestPageTableTrait, HostPageNum, HostPhysAddr, HostVirtAddr,
     HyperResult, VmExitInfo,
 };
+use alloc::boxed::Box;
 use iced_x86::Instruction;
 
 /// The interfaces which the underlginh software(kernel or hypervisor) must implement.
-pub trait HyperCraftHal: Sized {
+pub trait HyperCraftHal {
     /// Page size.
     const PAGE_SIZE: usize = PAGE_SIZE_4K;
 
@@ -67,6 +68,16 @@ pub trait PerCpuDevices<H: HyperCraftHal>: Sized {
     fn nmi_handler(&mut self, vcpu: &mut VCpu<H>) -> HyperResult<u32>;
     /// Checks whether there are some new events and injects them.
     fn check_events(&mut self, vcpu: &mut VCpu<H>) -> HyperResult;
+}
+
+/// Emulated devices of VM.
+pub trait EmuDev<H: HyperCraftHal> {
+    fn vmexit_handler(
+        &mut self,
+        vcpu: &mut VCpu<H>,
+        exit_info: &VmExitInfo,
+        instr: Option<Instruction>,
+    ) -> Option<HyperResult>;
 }
 
 #[cfg(target_arch = "x86_64")]
