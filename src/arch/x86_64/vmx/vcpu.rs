@@ -95,7 +95,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // ept_root: HostPhysAddr,
     ) -> HyperResult<Self> {
         XState::enable_xsave();
-        let mut vcpu = Self {
+        let vcpu = Self {
             guest_regs: GeneralRegisters::default(),
             host_stack_top: 0,
             vcpu_id,
@@ -116,6 +116,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(vcpu)
     }
 
+    /// Set the new [`VmxVcpu`] context from host Linux.
     pub fn setup_from_host(&mut self, ept_root: HostPhysAddr, linux: &LinuxContext) -> HyperResult {
         self.setup_type15_vmcs(ept_root, linux)?;
         let regs = self.regs_mut();

@@ -1,13 +1,13 @@
-use x86::{bits64::vmx, vmx::VmFail};
-use x86_64::registers::control::{Cr0, Cr4, Cr4Flags, Cr0Flags};
 use raw_cpuid::CpuId;
+use x86::{bits64::vmx, vmx::VmFail};
+use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
-use crate::{HyperCraftHal, HyperError, HyperResult};
-use crate::arch::msr::{Msr, MsrReadWrite, VmxBasic, FeatureControl, FeatureControlFlags};
 use super::detect::has_hardware_support;
-use super::region::VmxRegion;
 #[cfg(feature = "type1_5")]
 use super::linux_context::LinuxContext;
+use super::region::VmxRegion;
+use crate::arch::msr::{FeatureControl, FeatureControlFlags, Msr, MsrReadWrite, VmxBasic};
+use crate::{HyperCraftHal, HyperError, HyperResult};
 #[cfg(feature = "type1_5")]
 const HOST_CR0: Cr0Flags = Cr0Flags::from_bits_truncate(
     Cr0Flags::PAGING.bits()
@@ -30,7 +30,7 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
     pub const fn new() -> Self {
         Self {
             vmcs_revision_id: 0,
-            vmx_region: unsafe { VmxRegion::uninit() },
+            vmx_region: VmxRegion::uninit(),
         }
     }
 
@@ -117,7 +117,7 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
             warn!("VMX is already turned on!");
             return Err(HyperError::BadState);
         }
-        
+
         // Enable VMXON, if required.
         let ctrl = FeatureControl::read();
         let locked = ctrl.contains(FeatureControlFlags::LOCKED);
@@ -159,7 +159,7 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
             if features.has_xsave() {
                 cr4 |= Cr4Flags::OSXSAVE;
             }
-        } 
+        }
         // debug!("this is cr4 flags after set osxsave:{:?}", cr4);
         unsafe {
             Cr0::write(HOST_CR0);
@@ -184,7 +184,7 @@ impl<H: HyperCraftHal> VmxPerCpuState<H> {
             Cr4::update(|cr4| cr4.remove(Cr4Flags::VIRTUAL_MACHINE_EXTENSIONS));
         };
 
-        self.vmx_region = unsafe { VmxRegion::uninit() };
+        self.vmx_region = VmxRegion::uninit();
         Ok(())
     }
 
