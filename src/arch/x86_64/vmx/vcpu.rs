@@ -90,7 +90,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     /// Create a new [`VmxVcpu`].
     pub fn new(
         vcpu_id: usize,
-        // vmcs_revision_id: u32,
+        vmcs_revision_id: u32,
         // entry: GuestPhysAddr,
         // ept_root: HostPhysAddr,
     ) -> HyperResult<Self> {
@@ -100,8 +100,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
             host_stack_top: 0,
             vcpu_id,
             launched: false,
-            // vmcs: VmxRegion::new(vmcs_revision_id, false)?,
-            vmcs: VmxRegion::uninit(),
+            vmcs: VmxRegion::new(vmcs_revision_id, false)?,
             io_bitmap: IOBitmap::passthrough_all()?,
             msr_bitmap: MsrBitmap::passthrough_all()?,
             pending_events: VecDeque::with_capacity(8),
@@ -112,7 +111,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         // vcpu.setup_io_bitmap()?;
         // vcpu.setup_msr_bitmap()?;
         // vcpu.setup_vmcs(entry, ept_root)?;
-        // info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
+        info!("[HV] created VmxVcpu(vmcs: {:#x})", vcpu.vmcs.phys_addr());
         Ok(vcpu)
     }
 
@@ -756,6 +755,7 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     fn setup_type15_vmcs(&mut self, ept_root: HostPhysAddr, linux: &LinuxContext) -> HyperResult {
         let paddr = self.vmcs.phys_addr() as u64;
+        assert_ne!(paddr, 0, "VmxVcpu invalid VMCS region");
         unsafe {
             vmx::vmclear(paddr)?;
         }
