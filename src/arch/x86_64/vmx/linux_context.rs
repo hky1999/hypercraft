@@ -2,8 +2,8 @@ use super::super::msr::Msr;
 use x86::{segmentation, task};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr3Flags, Cr4, Cr4Flags};
 // use x86_64::{addr::PhysAddr, structures::paging::PhysFrame, structures::DescriptorTablePointer};
-use x86::dtables::{self, DescriptorTablePointer};
 use super::segmentation::Segment;
+use x86::dtables::{self, DescriptorTablePointer};
 
 const SAVED_LINUX_REGS: usize = 8;
 
@@ -109,7 +109,7 @@ pub struct GeneralRegisters {
     /// General purpose registers r15
     pub r15: u64,
 }
-/* 
+/*
 macro_rules! save_regs_to_stack {
     () => {
         "
@@ -155,8 +155,42 @@ macro_rules! restore_regs_from_stack {
 }
 
 impl LinuxContext {
+    /// Construct invalid LinuxContext.
+    pub fn invalid() -> Self {
+        Self {
+            es: Segment::invalid(),
+            cs: Segment::invalid(),
+            ss: Segment::invalid(),
+            ds: Segment::invalid(),
+            fs: Segment::invalid(),
+            gs: Segment::invalid(),
+            tss: Segment::invalid(),
+            gdt: DescriptorTablePointer::<u64>::default(),
+            idt: DescriptorTablePointer::<u64>::default(),
+            rsp: 0,
+            rip: 0,
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            rbx: 0,
+            rbp: 0,
+            cr0: Cr0Flags::empty(),
+            cr3: 0,
+            cr4: Cr4Flags::empty(),
+            efer: 0,
+            star: 0,
+            lstar: 0,
+            cstar: 0,
+            fmask: 0,
+            kernel_gsbase: 0,
+            pat: 0,
+            mtrr_def_type: 0,
+        }
+    }
+
     /// Load linux callee-saved registers from the stack, and other system registers.
-    pub fn load_from(linux_sp: usize) -> Self {
+    pub fn load_from(&mut self, linux_sp: usize) {
         let regs = unsafe { core::slice::from_raw_parts(linux_sp as *const u64, SAVED_LINUX_REGS) };
         // let gdt = GdtStruct::sgdt();
 
@@ -165,42 +199,40 @@ impl LinuxContext {
         unsafe {
             dtables::sgdt(&mut gdt);
             dtables::sidt(&mut idt);
-        } 
+        }
         let mut fs = Segment::from_selector(x86::segmentation::fs(), &gdt);
         let mut gs = Segment::from_selector(x86::segmentation::gs(), &gdt);
         fs.base = Msr::IA32_FS_BASE.read();
         gs.base = regs[0];
 
-        Self {
-            rsp: regs.as_ptr_range().end as _,
-            r15: regs[1],
-            r14: regs[2],
-            r13: regs[3],
-            r12: regs[4],
-            rbx: regs[5],
-            rbp: regs[6],
-            rip: regs[7],
-            es: Segment::from_selector(segmentation::es(), &gdt),
-            cs: Segment::from_selector(segmentation::cs(), &gdt),
-            ss: Segment::from_selector(segmentation::ss(), &gdt),
-            ds: Segment::from_selector(segmentation::ds(), &gdt),
-            fs,
-            gs,
-            tss: Segment::from_selector(unsafe { task::tr() }, &gdt),
-            gdt,
-            idt: idt,
-            cr0: Cr0::read(),
-            cr3: Cr3::read().0.start_address().as_u64(),
-            cr4: Cr4::read(),
-            efer: Msr::IA32_EFER.read(),
-            star: Msr::IA32_STAR.read(),
-            lstar: Msr::IA32_LSTAR.read(),
-            cstar: Msr::IA32_CSTAR.read(),
-            fmask: Msr::IA32_FMASK.read(),
-            kernel_gsbase: Msr::IA32_KERNEL_GSBASE.read(),
-            pat: Msr::IA32_PAT.read(),
-            mtrr_def_type: Msr::IA32_MTRR_DEF_TYPE.read(),
-        }
+        self.rsp = regs.as_ptr_range().end as _;
+        self.r15 = regs[1];
+        self.r14 = regs[2];
+        self.r13 = regs[3];
+        self.r12 = regs[4];
+        self.rbx = regs[5];
+        self.rbp = regs[6];
+        self.rip = regs[7];
+        self.es = Segment::from_selector(segmentation::es(), &gdt);
+        self.cs = Segment::from_selector(segmentation::cs(), &gdt);
+        self.ss = Segment::from_selector(segmentation::ss(), &gdt);
+        self.ds = Segment::from_selector(segmentation::ds(), &gdt);
+        self.fs = fs;
+        self.gs = gs;
+        self.tss = Segment::from_selector(unsafe { task::tr() }, &gdt);
+        self.gdt = gdt;
+        self.idt = idt;
+        self.cr0 = Cr0::read();
+        self.cr3 = Cr3::read().0.start_address().as_u64();
+        self.cr4 = Cr4::read();
+        self.efer = Msr::IA32_EFER.read();
+        self.star = Msr::IA32_STAR.read();
+        self.lstar = Msr::IA32_LSTAR.read();
+        self.cstar = Msr::IA32_CSTAR.read();
+        self.fmask = Msr::IA32_FMASK.read();
+        self.kernel_gsbase = Msr::IA32_KERNEL_GSBASE.read();
+        self.pat = Msr::IA32_PAT.read();
+        self.mtrr_def_type = Msr::IA32_MTRR_DEF_TYPE.read();
     }
 
     /// Restore linux general-purpose registers and stack, then return back to linux.
