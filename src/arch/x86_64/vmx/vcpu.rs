@@ -115,10 +115,14 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
         Ok(vcpu)
     }
 
+    /// Set the new [`VmxVcpu`] context from guest OS.
+    pub fn setup(&mut self, ept_root: HostPhysAddr, entry: GuestPhysAddr) -> HyperResult {
+        self.setup_vmcs(entry, ept_root)?;
+        Ok(())
+    }
+
     /// Set the new [`VmxVcpu`] context from host Linux.
     pub fn setup_from_host(&mut self, ept_root: HostPhysAddr, linux: &LinuxContext) -> HyperResult {
-        debug!("Set Linux context\n{:#x?}", linux);
-
         self.setup_type15_vmcs(ept_root, linux)?;
         let regs = self.regs_mut();
         regs.rax = 0;
@@ -138,7 +142,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     /// Bind this [`VmxVcpu`] to current logical processor.
     pub fn bind_to_current_processor(&self) -> HyperResult {
-        debug!("VmxVcpu[{}] bind to current processor vmcs @ {:#x}", self.vcpu_id, self.vmcs.phys_addr());
+        debug!(
+            "VmxVcpu[{}] bind to current processor vmcs @ {:#x}",
+            self.vcpu_id,
+            self.vmcs.phys_addr()
+        );
         unsafe {
             vmx::vmptrld(self.vmcs.phys_addr() as u64)?;
         }
@@ -147,7 +155,11 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
 
     /// Unbind this [`VmxVcpu`] from current logical processor.
     pub fn unbind_from_current_processor(&self) -> HyperResult {
-        debug!("VmxVcpu[{}] unbind from current processor vmcs @ {:#x}", self.vcpu_id, self.vmcs.phys_addr());
+        debug!(
+            "VmxVcpu[{}] unbind from current processor vmcs @ {:#x}",
+            self.vcpu_id,
+            self.vmcs.phys_addr()
+        );
 
         unsafe {
             vmx::vmclear(self.vmcs.phys_addr() as u64)?;
