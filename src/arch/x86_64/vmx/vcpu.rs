@@ -154,12 +154,14 @@ impl<H: HyperCraftHal> VmxVcpu<H> {
     }
 
     /// Unbind this [`VmxVcpu`] from current logical processor.
-    pub fn unbind_from_current_processor(&self) -> HyperResult {
+    pub fn unbind_from_current_processor(&mut self) -> HyperResult {
         debug!(
             "VmxVcpu[{}] unbind from current processor vmcs @ {:#x}",
             self.vcpu_id,
             self.vmcs.phys_addr()
         );
+
+        self.launched = false;
 
         unsafe {
             vmx::vmclear(self.vmcs.phys_addr() as u64)?;
